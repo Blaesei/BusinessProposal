@@ -1,0 +1,14 @@
+{
+  "name": "STLAF Proposals Management System",
+  "description": "A professional proposal management system for Sadsad Tamesis Legal and Accountancy Firm, featuring Google Docs integration, automated document generation, and multi-role review workflows.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Google Docs Integration",
+    "Firestore Backend",
+    "Firebase Authentication"
+  ]
+}

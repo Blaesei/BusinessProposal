@@ -1,0 +1,132 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'damoncrz2872@gmail.com' ||
+        request.auth.token.email == 'stlaf.acc08@gmail.com' ||
+        request.auth.uid == 'wY4rgbtqAWgzXz0hlrLLVvRrGWM2'
+      );
+    }
+
+    function isStaff() {
+      return isSignedIn() && (
+        isAdmin() ||
+        request.auth.token.email == 'mike.paras272@gmail.com' ||
+        request.auth.token.email == 'stlaf.acc07@gmail.com' ||
+        request.auth.token.email == 'dcpebenito@sadsadtamesislaw.com'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isStaff();
+      
+      function isValidUser(data) {
+        return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt']) &&
+               data.keys().size() >= 5 && data.keys().size() <= 7 &&
+               data.uid == request.auth.uid &&
+               data.email is string && data.email.size() <= 200 &&
+               data.displayName is string && data.displayName.size() <= 100 &&
+               data.role in ['normal', 'staff', 'admin'] &&
+               data.createdAt == request.time;
+      }
+
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'role', 'updatedAt']));
+    }
+
+    // --- Admins Collection ---
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if false; 
+    }
+
+    // --- Message Templates Subcollection ---
+    match /users/{userId}/messageTemplates/{templateId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // --- Proposals Collection ---
+    match /proposals/{proposalId} {
+      function isValidProposal(data) {
+        return data.keys().hasAll([
+          'companyName', 'address', 'email', 'contactPerson', 'position', 
+          'serviceTypes', 'feeType', 'feeAmount', 'feeNotes', 'status', 
+          'googleDocUrl', 'googleDocId', 'createdBy', 'createdByName', 'createdAt',
+          'periodCover', 'reviewerNotes', 'updatedAt'
+        ]) &&
+        data.keys().size() >= 15 && data.keys().size() <= 40 &&
+        data.companyName is string && data.companyName.size() <= 500 &&
+        data.status in ['Draft', 'Pending Review', 'Approved', 'Denied', 'Revision Requested', 'Sent'];
+      }
+
+      function canReadProposal() {
+        let isCreator = resource.data.createdBy == request.auth.uid;
+        let isDraft = resource.data.status == 'Draft';
+        
+        return isSignedIn() && (
+          isCreator || 
+          ((isAdmin() || isStaff()) && !isDraft)
+        );
+      }
+
+      function canUpdateProposal() {
+        let isCreator = resource.data.createdBy == request.auth.uid;
+        let isDraft = resource.data.status == 'Draft';
+
+        return isSignedIn() && (
+          (isAdmin() && !isDraft) || 
+          (isCreator && (
+            // Creator can update if status is valid for editing
+            resource.data.status in ['Draft', 'Revision Requested', 'Denied', 'Pending Review']
+          ))
+        );
+      }
+
+      allow get: if canReadProposal();
+      allow list: if canReadProposal();
+
+      allow create: if isSignedIn() && isValidProposal(request.resource.data) && 
+                      request.resource.data.createdBy == request.auth.uid;
+      
+      allow update: if canUpdateProposal();
+      
+      allow delete: if isAdmin(); 
+    }
+
+    // --- Proposal Templates Collection ---
+    match /proposalTemplates/{templateId} {
+      allow read: if isSignedIn() && (resource.data.createdBy == request.auth.uid || isAdmin());
+      allow write: if isSignedIn() && (request.resource.data.createdBy == request.auth.uid || isAdmin());
+    }
+
+    // --- Notifications Collection ---
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create: if isStaff(); 
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
