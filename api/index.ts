@@ -5,14 +5,26 @@
 // Purpose: Serverless entry point for Vercel deployment forwarding to Express router.
 //
 
-import { startServer } from '../server';
-
 let cachedApp: any = null;
 
 export default async function handler(req: any, res: any) {
-  if (!cachedApp) {
-    // startServer builds the Express app and registers all routes
-    cachedApp = await startServer();
+  try {
+    if (!cachedApp) {
+      // Dynamic import to catch any module-load / top-level errors in server.ts
+      const { startServer } = await import('../server');
+      cachedApp = await startServer();
+    }
+    
+    // Wrap execution to catch runtime routing errors
+    return cachedApp(req, res);
+  } catch (err: any) {
+    console.error("Vercel Serverless Function Crash:", err);
+    return res.status(500).json({
+      error: err?.message || "An unexpected error occurred at the serverless function boundary.",
+      stack: err?.stack,
+      name: err?.name,
+      code: err?.code
+    });
   }
-  return cachedApp(req, res);
 }
+

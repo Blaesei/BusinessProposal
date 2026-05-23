@@ -444,8 +444,29 @@ export default function ProposalDetail() {
         })
       });
 
-      const result = await resp.json();
-      if (!resp.ok) throw new Error(result.error || 'Failed to update document');
+      let result: any = {};
+      if (!resp.ok) {
+        let errorMsg = 'Failed to update document';
+        try {
+          const errData = await resp.json();
+          errorMsg = errData.error || errorMsg;
+        } catch (_) {
+          try {
+            const rawText = await resp.text();
+            if (rawText) {
+              errorMsg = rawText.substring(0, 150) + (rawText.length > 150 ? '...' : '');
+            }
+          } catch (__) {}
+        }
+        console.error('API Error Response:', errorMsg);
+        throw new Error(errorMsg);
+      } else {
+        try {
+          result = await resp.json();
+        } catch (jsonErr: any) {
+          throw new Error(`Invalid JSON response from server: ${jsonErr.message}`);
+        }
+      }
 
       const finalData = {
         ...formData,

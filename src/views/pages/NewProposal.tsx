@@ -508,10 +508,28 @@ export default function NewProposal() {
           })
         });
 
-        const result = await resp.json();
+        let result: any = {};
         if (!resp.ok) {
-          console.error('API Error Response:', result);
-          throw new Error(result.error || 'Failed to generate document');
+          let errorMsg = 'Failed to generate document';
+          try {
+            const errData = await resp.json();
+            errorMsg = errData.error || errorMsg;
+          } catch (_) {
+            try {
+              const rawText = await resp.text();
+              if (rawText) {
+                errorMsg = rawText.substring(0, 150) + (rawText.length > 150 ? '...' : '');
+              }
+            } catch (__) {}
+          }
+          console.error('API Error Response:', errorMsg);
+          throw new Error(errorMsg);
+        } else {
+          try {
+            result = await resp.json();
+          } catch (jsonErr: any) {
+            throw new Error(`Invalid JSON response from server: ${jsonErr.message}`);
+          }
         }
         googleDocId = result.docId;
         googleDocUrl = result.docUrl;
@@ -694,10 +712,28 @@ export default function NewProposal() {
         })
       });
 
-      const result = await resp.json();
+      let result: any = {};
       if (!resp.ok) {
-        console.error('API Error Response:', result);
-        throw new Error(result.error || 'Failed to generate document for preview');
+        let errorMsg = 'Failed to generate document for preview';
+        try {
+          const errData = await resp.json();
+          errorMsg = errData.error || errorMsg;
+        } catch (_) {
+          try {
+            const rawText = await resp.text();
+            if (rawText) {
+              errorMsg = rawText.substring(0, 150) + (rawText.length > 150 ? '...' : '');
+            }
+          } catch (__) {}
+        }
+        console.error('API Error Response:', errorMsg);
+        throw new Error(errorMsg);
+      } else {
+        try {
+          result = await resp.json();
+        } catch (jsonErr: any) {
+          throw new Error(`Invalid JSON response from server: ${jsonErr.message}`);
+        }
       }
 
       setPreviewDocId(result.docId);
