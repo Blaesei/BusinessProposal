@@ -17,7 +17,9 @@ import {
   X,
   ChevronRight,
   UserCircle,
-  RefreshCw
+  RefreshCw,
+  Shield,
+  Users
 } from 'lucide-react';
 import { 
   collection, 
@@ -27,6 +29,7 @@ import {
   updateDoc, 
   deleteDoc, 
   doc, 
+  setDoc,
   serverTimestamp,
   orderBy,
   where,
@@ -34,14 +37,14 @@ import {
 } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../App';
-import { MessageTemplate, Notification } from '../../models/types';
+import { MessageTemplate, Notification, UserProfile, UserRole } from '../../models/types';
 import Navbar from '../components/Navbar';
 import { cn, getDirectGoogleDriveLink } from '../../utils/utils';
 import { format, formatDistanceToNow } from 'date-fns';
 import { CheckCircle2, Clock, XCircle, AlertCircle, Link as LinkIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-type SettingsTab = 'profile' | 'message-templates' | 'proposal-templates' | 'notifications';
+type SettingsTab = 'profile' | 'message-templates' | 'proposal-templates' | 'notifications' | 'user-management';
 
 export default function Settings() {
   const { user, profile, isAdmin } = useAuth();
@@ -63,12 +66,90 @@ export default function Settings() {
   const [editPhotoURL, setEditPhotoURL] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // User Management State
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [updatingUserUid, setUpdatingUserUid] = useState<string | null>(null);
+  
+  // Non-blocking Toast state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4000);
+  };
+
   useEffect(() => {
     if (profile) {
       setEditName(profile.displayName || '');
       setEditPhotoURL(profile.photoURL || '');
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (activeTab !== 'user-management' || !isAdmin) return;
+    setLoadingUsers(true);
+    // Use stable, basic collection reference to avoid omitting documents missing 'createdAt'
+    const q = collection(db, 'users');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const usersData = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile));
+      // Sort locally in-memory to prevent Firestore index requirements and omissions
+      const sorted = usersData.sort((a, b) => {
+        const timeA = a.createdAt ? (a.createdAt.seconds || 0) : 0;
+        const timeB = b.createdAt ? (b.createdAt.seconds || 0) : 0;
+        return timeB - timeA;
+      });
+      setAllUsers(sorted);
+      setLoadingUsers(false);
+    }, (error) => {
+      console.error("Error loading users:", error);
+      setLoadingUsers(false);
+    });
+    return unsubscribe;
+  }, [activeTab, isAdmin]);
+
+  const handleUpdateRole = async (targetUserId: string, targetEmail: string, newRole: UserRole) => {
+    if (!isAdmin) return;
+    if (targetUserId === user?.uid) {
+      showToast("You cannot modify your own role.", "error");
+      return;
+    }
+    setUpdatingUserUid(targetUserId);
+    try {
+      // 1. Update role in the user's document
+      await updateDoc(doc(db, 'users', targetUserId), {
+        role: newRole,
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Consistent sync to admins collection
+      if (newRole === 'admin') {
+        const adminRef = doc(db, 'admins', targetUserId);
+        await setDoc(adminRef, {
+          email: targetEmail,
+          uid: targetUserId,
+          assignedAt: serverTimestamp(),
+          assignedBy: user?.uid || ''
+        });
+      } else {
+        const adminRef = doc(db, 'admins', targetUserId);
+        try {
+          await deleteDoc(adminRef);
+        } catch (e) {
+          console.log('[Info] User was not in admins collection to remove.');
+        }
+      }
+
+      showToast(`User role updated to ${newRole} successfully.`);
+    } catch (error) {
+      console.error("Error updating user role:", error);
+      showToast('Failed to update user role.', 'error');
+    } finally {
+      setUpdatingUserUid(null);
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -252,6 +333,14 @@ export default function Settings() {
                       label="Message Templates" 
                       active={activeTab === 'message-templates'} 
                       onClick={() => setActiveTab('message-templates')} 
+                    />
+                  )}
+                  {isAdmin && (
+                    <SidebarItem 
+                      icon={Users} 
+                      label="User Management" 
+                      active={activeTab === 'user-management'} 
+                      onClick={() => setActiveTab('user-management')} 
                     />
                   )}
                   <SidebarItem 
@@ -531,6 +620,129 @@ export default function Settings() {
                   )}
                 </div>
               )}
+
+              {activeTab === 'user-management' && isAdmin && (
+                <div>
+                  <div className="mb-8">
+                    <h2 className="text-xl font-bold text-slate-900">User Management</h2>
+                    <p className="text-sm text-slate-500 font-medium">Manage user accounts and assign security roles (Admin, Staff, Normal).</p>
+                  </div>
+
+                  {loadingUsers ? (
+                    <div className="flex justify-center items-center py-12">
+                      <RefreshCw className="h-8 w-8 text-[#1E2D5A] animate-spin" />
+                    </div>
+                  ) : allUsers.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-150">
+                        <thead>
+                          <tr className="bg-slate-55/40">
+                            <th scope="col" className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-widest bg-slate-50">User</th>
+                            <th scope="col" className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-widest bg-slate-50">Email</th>
+                            <th scope="col" className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-widest bg-slate-50">Role</th>
+                            <th scope="col" className="px-6 py-4 text-right text-xs font-black text-slate-400 uppercase tracking-widest bg-slate-50">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white">
+                          {allUsers.map((u) => {
+                            const isSelf = u.uid === user?.uid;
+                            return (
+                              <tr key={u.uid} className="hover:bg-slate-50/50 transition-all border-b border-slate-100 last:border-none">
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="flex items-center gap-3">
+                                    <div className="h-10 w-10 rounded-xl bg-[#1E2D5A] shadow-sm flex items-center justify-center border border-white overflow-hidden text-white font-bold">
+                                      {u.photoURL ? (
+                                        <img src={getDirectGoogleDriveLink(u.photoURL)} alt="Avatar" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                      ) : (
+                                        <span>{u.displayName?.charAt(0).toUpperCase() || 'U'}</span>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <div className="text-sm font-bold text-slate-900">
+                                        {u.displayName || 'Unnamed User'}
+                                        {isSelf && <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 font-black px-1.5 py-0.5 rounded uppercase">You</span>}
+                                      </div>
+                                      <div className="text-xs text-slate-400 font-medium">ID: {u.uid}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-medium">
+                                  {u.email}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span className={cn(
+                                    "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                                    u.role === 'admin' 
+                                      ? "bg-slate-950 text-white" 
+                                      : u.role === 'staff'
+                                        ? "bg-indigo-50 text-indigo-700 border border-indigo-100"
+                                        : "bg-slate-50 text-slate-500 border border-slate-200"
+                                  )}>
+                                    {u.role === 'admin' && <Shield className="h-3 w-3 inline text-white" />}
+                                    {u.role || 'normal'}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-right text-xs">
+                                  {updatingUserUid === u.uid ? (
+                                    <div className="inline-flex items-center gap-2 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                                      <RefreshCw className="h-4 w-4 animate-spin" />
+                                      Updating...
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button 
+                                        disabled={isSelf}
+                                        onClick={() => handleUpdateRole(u.uid, u.email, 'admin')}
+                                        className={cn(
+                                          "px-2.5 py-1.5 rounded-lg text-xs font-bold font-sans transition-all active:scale-95 disabled:opacity-30",
+                                          u.role === 'admin'
+                                            ? "text-slate-400 cursor-not-allowed hidden"
+                                            : "bg-slate-900 text-white hover:bg-black"
+                                        )}
+                                      >
+                                        Admin
+                                      </button>
+                                      <button 
+                                        disabled={isSelf}
+                                        onClick={() => handleUpdateRole(u.uid, u.email, 'staff')}
+                                        className={cn(
+                                          "px-2.5 py-1.5 rounded-lg text-xs font-bold font-sans transition-all active:scale-95 disabled:opacity-30",
+                                          u.role === 'staff'
+                                            ? "text-indigo-400 cursor-not-allowed hidden"
+                                            : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100/55"
+                                        )}
+                                      >
+                                        Staff
+                                      </button>
+                                      <button 
+                                        disabled={isSelf}
+                                        onClick={() => handleUpdateRole(u.uid, u.email, 'normal')}
+                                        className={cn(
+                                          "px-2.5 py-1.5 rounded-lg text-xs font-bold font-sans transition-all active:scale-95 disabled:opacity-30",
+                                          u.role === 'normal' || !u.role
+                                            ? "text-slate-400 cursor-not-allowed hidden"
+                                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                        )}
+                                      >
+                                        Normal
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
+                      <Users className="h-12 w-12 text-slate-200 mx-auto mb-3" />
+                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">No users found</h3>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -611,6 +823,22 @@ export default function Settings() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={cn(
+          "fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl border shadow-xl animate-in slide-in-from-bottom-5 fade-in duration-300",
+          toast.type === 'success' 
+            ? "bg-slate-900 border-slate-800 text-white" 
+            : "bg-red-50 border-red-200 text-red-700"
+        )}>
+          {toast.type === 'success' ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+          ) : (
+            <XCircle className="h-5 w-5 text-red-500" />
+          )}
+          <span className="text-sm font-semibold">{toast.message}</span>
         </div>
       )}
     </div>

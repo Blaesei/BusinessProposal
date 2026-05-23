@@ -80,40 +80,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsStaff(isUserAdmin || isUserStaff);
 
           // Listen for profile changes in real-time
+          let isFirstEmission = true;
           profileUnsubscribe = onSnapshot(doc(db, 'users', firebaseUser.uid), async (userDoc) => {
-            if (userDoc.exists()) {
-              const userData = userDoc.data() as UserProfile;
-              // Sync role if needed
-              const targetRole = isUserAdmin ? 'admin' : (isUserStaff ? 'staff' : 'normal');
-              if (userData.role !== targetRole) {
-                 await setDoc(doc(db, 'users', firebaseUser.uid), { role: targetRole }, { merge: true });
-                 // The next snapshot will have the updated role
+            try {
+              if (userDoc.exists()) {
+                const userData = userDoc.data() as UserProfile;
+                let activeRole = userData.role;
+
+                const isBootstrappedAdmin = firebaseUser.email && ADMIN_EMAILS.includes(firebaseUser.email);
+                const isBootstrappedStaff = firebaseUser.email && STAFF_EMAILS.includes(firebaseUser.email);
+
+                // Default role if not set
+                if (!activeRole) {
+                  activeRole = isBootstrappedAdmin ? 'admin' : (isBootstrappedStaff ? 'staff' : (isUserAdmin ? 'admin' : (isUserStaff ? 'staff' : 'normal')));
+                  await setDoc(doc(db, 'users', firebaseUser.uid), { role: activeRole }, { merge: true });
+                }
+
+                setProfile({ ...userData, role: activeRole });
+                setIsAdmin(activeRole === 'admin');
+                setIsStaff(activeRole === 'admin' || activeRole === 'staff');
               } else {
-                setProfile(userData);
+                // Create new user profile
+                const isBootstrappedAdmin = firebaseUser.email && ADMIN_EMAILS.includes(firebaseUser.email);
+                const isBootstrappedStaff = firebaseUser.email && STAFF_EMAILS.includes(firebaseUser.email);
+                const defaultRole = isBootstrappedAdmin ? 'admin' : (isBootstrappedStaff ? 'staff' : (isUserAdmin ? 'admin' : (isUserStaff ? 'staff' : 'normal')));
+                
+                const newProfile: UserProfile = {
+                  uid: firebaseUser.uid,
+                  email: firebaseUser.email || '',
+                  displayName: firebaseUser.displayName || '',
+                  photoURL: firebaseUser.photoURL || '',
+                  role: defaultRole,
+                  createdAt: serverTimestamp(),
+                };
+                await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
               }
-            } else {
-              // Create new user profile
-              const newProfile: UserProfile = {
-                uid: firebaseUser.uid,
-                email: firebaseUser.email || '',
-                displayName: firebaseUser.displayName || '',
-                photoURL: firebaseUser.photoURL || '',
-                role: isUserAdmin ? 'admin' : (isUserStaff ? 'staff' : 'normal'),
-                createdAt: serverTimestamp(),
-              };
-              await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-              // Profile will be set by the subsequent snapshot
+            } catch (err) {
+              console.error("Profile snapshot parsing error:", err);
+            } finally {
+              if (isFirstEmission) {
+                isFirstEmission = false;
+                setLoading(false);
+              }
+            }
+          }, (error) => {
+            console.error("Profile snapshot listener error:", error);
+            if (isFirstEmission) {
+              isFirstEmission = false;
+              setLoading(false);
             }
           });
         } catch (error) {
           console.error("Auth sync error:", error);
+          setLoading(false);
         }
       } else {
         setProfile(null);
         setIsAdmin(false);
         setIsStaff(false);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => {

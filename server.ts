@@ -110,7 +110,7 @@ const formatCurrencyWithWordsUpper = (amount: number | null | undefined): string
 };
 
 // ─── startServer ────────────────────────────────────────────────────────────
-async function startServer() {
+export async function startServer() {
   const app  = express();
   const PORT = 3000;
 
@@ -1035,7 +1035,7 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
@@ -1052,9 +1052,17 @@ async function startServer() {
     });
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ Server running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Server running on http://localhost:${PORT}`);
+    });
+  }
+
+  return app;
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error("Failed to start server:", err);
+  });
+}

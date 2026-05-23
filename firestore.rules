@@ -17,6 +17,7 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
         request.auth.token.email == 'damoncrz2872@gmail.com' ||
         request.auth.token.email == 'stlaf.acc08@gmail.com' ||
         request.auth.uid == 'wY4rgbtqAWgzXz0hlrLLVvRrGWM2'
@@ -26,6 +27,7 @@ service cloud.firestore {
     function isStaff() {
       return isSignedIn() && (
         isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff') ||
         request.auth.token.email == 'mike.paras272@gmail.com' ||
         request.auth.token.email == 'stlaf.acc07@gmail.com' ||
         request.auth.token.email == 'dcpebenito@sadsadtamesislaw.com'
@@ -52,13 +54,13 @@ service cloud.firestore {
       }
 
       allow create: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'role', 'updatedAt']));
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt']));
     }
 
     // --- Admins Collection ---
     match /admins/{userId} {
       allow read: if isSignedIn();
-      allow write: if false; 
+      allow write: if isAdmin(); 
     }
 
     // --- Message Templates Subcollection ---
