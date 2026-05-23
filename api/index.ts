@@ -5,13 +5,13 @@
 // Purpose: Serverless entry point for Vercel deployment forwarding to Express router.
 //
 
+import { startServer } from '../server.js';
+
 let cachedApp: any = null;
 
 export default async function handler(req: any, res: any) {
   try {
     if (!cachedApp) {
-      // Dynamic import to catch any module-load / top-level errors in server.ts
-      const { startServer } = await import('../server');
       cachedApp = await startServer();
     }
     
