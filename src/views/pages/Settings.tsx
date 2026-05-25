@@ -175,12 +175,16 @@ export default function Settings() {
     if (!user) return;
     const q = query(
       collection(db, 'notifications'),
-      where('userId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(50)
+      where('userId', '==', user.uid)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setNotifications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification)));
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification));
+      list.sort((a, b) => {
+        const t1 = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+        const t2 = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+        return t2 - t1;
+      });
+      setNotifications(list.slice(0, 50));
     });
     return unsubscribe;
   }, [user]);

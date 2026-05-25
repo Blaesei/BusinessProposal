@@ -113,13 +113,14 @@ service cloud.firestore {
       
       allow update: if canUpdateProposal();
       
-      allow delete: if isAdmin(); 
+      allow delete: if isAdmin() || (isStaff() && resource.data.createdBy == request.auth.uid && resource.data.status == 'Draft'); 
     }
 
     // --- Proposal Templates Collection ---
     match /proposalTemplates/{templateId} {
-      allow read: if isSignedIn() && (resource.data.createdBy == request.auth.uid || isAdmin());
-      allow write: if isSignedIn() && (request.resource.data.createdBy == request.auth.uid || isAdmin());
+      allow read: if isSignedIn() && (resource.data.createdBy == request.auth.uid || isAdmin() || isStaff());
+      allow create, update: if isSignedIn() && (request.resource.data.createdBy == request.auth.uid || isAdmin() || isStaff());
+      allow delete: if isSignedIn() && (resource.data.createdBy == request.auth.uid || isAdmin());
     }
 
     // --- Notifications Collection ---

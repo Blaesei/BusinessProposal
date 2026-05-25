@@ -48,6 +48,7 @@ export default function NewProposal() {
   const [currencyInputs, setCurrencyInputs] = useState<Record<string, string>>({});
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [availableTemplates, setAvailableTemplates] = useState<any[]>([]);
   const lastCalculatedFileName = useRef('');
 
@@ -88,19 +89,46 @@ export default function NewProposal() {
 
   const isClientInfoFilled = Boolean(formData.companyName && formData.address && formData.email && formData.contactPerson && formData.position);
 
-  // Load available templates (Personal)
+  // Load available templates
   useEffect(() => {
     if (!user) return;
-    const q = query(
-      collection(db, 'proposalTemplates'), 
-      where('createdBy', '==', user.uid),
-      orderBy('createdAt', 'desc')
-    );
+    
+    // We query the whole collection of proposalTemplates. 
+    // If the user is staff or admin, they will get all templates.
+    // If they are a normal user, Firestore rules will only allow them to read templates where createdBy == user.uid,
+    // so we should restrict the query to createdBy == user.uid if the user is normal to avoid permission denied.
+    const isPowerUser = isAdmin || isStaff;
+    const q = isPowerUser
+      ? query(collection(db, 'proposalTemplates'))
+      : query(collection(db, 'proposalTemplates'), where('createdBy', '==', user.uid));
+      
     const unsub = onSnapshot(q, (snap) => {
-      setAvailableTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'proposalTemplates'));
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort on client side to avoid needing composite index setup in Firestore
+      list.sort((a: any, b: any) => {
+        const timeA = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+        const timeB = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+        return timeB - timeA;
+      });
+      setAvailableTemplates(list);
+    }, (err) => {
+      console.error('[ERROR] Failed to load proposal templates in NewProposal (global query):', err);
+      // Fallback: try loading just personal if the global query failed
+      const personalQuery = query(collection(db, 'proposalTemplates'), where('createdBy', '==', user.uid));
+      onSnapshot(personalQuery, (personalSnap) => {
+        const list = personalSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a: any, b: any) => {
+          const timeA = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+          const timeB = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+          return timeB - timeA;
+        });
+        setAvailableTemplates(list);
+      }, (err2) => {
+        handleFirestoreError(err2, OperationType.LIST, 'proposalTemplates');
+      });
+    });
     return unsub;
-  }, [user]);
+  }, [user, isAdmin, isStaff]);
 
   // Default Filename Calculation (Auto-reflecting)
   useEffect(() => {
@@ -329,9 +357,10 @@ export default function NewProposal() {
   };
 
   const handleLoadTemplate = (tpl: any) => {
+    const data = tpl.data;
     setFormData(prev => ({
       ...prev,
-      ...tpl.data,
+      ...data,
       // Keep current client info
       companyName: prev.companyName,
       address: prev.address,
@@ -341,25 +370,23 @@ export default function NewProposal() {
       title: prev.title,
     }));
     
-    // Update currency inputs
-    const data = tpl.data;
-    setCurrencyInputs(prev => ({
-      ...prev,
-       feeAmount: data.feeAmount?.toString() || '',
-       monthlyTaxRetainerFee: data.monthlyTaxRetainerFee?.toString() || '',
-       acceptanceFee: data.acceptanceFee?.toString() || '',
-       timeBasedFee: data.timeBasedFee?.toString() || '',
-       successFee: data.successFee?.toString() || '',
-       feeTotal: data.feeTotal?.toString() || '',
-       forensicFixedFee: data.forensicFixedFee?.toString() || '',
-       ...Object.fromEntries(data.hourlyRates?.map((r: any, i: number) => [`hourlyRate_${i}`, r.rate.toString()]) || []),
-       ...Object.fromEntries(data.afsFeeTable?.map((r: any, i: number) => [`afsFee_${i}`, r.amount?.toString() || '']) || [])
-    }));
+    // Re-initialize currency inputs cleanly
+    setCurrencyInputs({
+      feeAmount: data.feeAmount?.toString() || '',
+      monthlyTaxRetainerFee: data.monthlyTaxRetainerFee?.toString() || '',
+      acceptanceFee: data.acceptanceFee?.toString() || '',
+      timeBasedFee: data.timeBasedFee?.toString() || '',
+      successFee: data.successFee?.toString() || '',
+      feeTotal: data.feeTotal?.toString() || '',
+      forensicFixedFee: data.forensicFixedFee?.toString() || '',
+      ...Object.fromEntries(data.hourlyRates?.map((r: any, i: number) => [`hourlyRate_${i}`, r.rate?.toString() || '']) || []),
+      ...Object.fromEntries(data.afsFeeTable?.map((r: any, i: number) => [`afsFee_${i}`, r.amount?.toString() || '']) || [])
+    });
   };
 
   const formatCurrencyInput = (field: string, numericValue: number | null) => {
     const raw = currencyInputs[field];
-    if (raw === undefined) {
+    if (raw === undefined || raw === null || raw === '') {
       return numericValue !== null ? numericValue.toLocaleString('en-US') : '';
     }
     
@@ -847,9 +874,16 @@ export default function NewProposal() {
           {availableTemplates.length > 0 && !id && (
             <div className="relative group">
               <select 
+                value={selectedTemplateId}
                 onChange={(e) => {
-                  const tpl = availableTemplates.find(t => t.id === e.target.value);
-                  if (tpl) handleLoadTemplate(tpl);
+                  const val = e.target.value;
+                  setSelectedTemplateId(val);
+                  if (val) {
+                    const tpl = availableTemplates.find(t => t.id === val);
+                    if (tpl) handleLoadTemplate(tpl);
+                  }
+                  // Reset back to blank option after load
+                  setTimeout(() => setSelectedTemplateId(''), 100);
                 }}
                 className="appearance-none bg-white border border-slate-200 px-4 py-2 pr-10 rounded-xl text-sm font-bold text-[#1E2D5A] focus:outline-none focus:ring-2 focus:ring-[#1E2D5A]/10 shadow-sm transition-all cursor-pointer"
               >

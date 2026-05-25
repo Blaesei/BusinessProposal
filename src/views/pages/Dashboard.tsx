@@ -45,21 +45,25 @@ export default function Dashboard() {
         or(
           where('createdBy', '==', user.uid),
           where('status', 'in', ['Pending Review', 'Approved', 'Denied', 'Revision Requested', 'Sent'])
-        ),
-        orderBy('createdAt', 'desc')
+        )
       );
     } else {
       // Normal/personal users only see their own proposals
       q = query(
         collection(db, 'proposals'), 
-        where('createdBy', '==', user.uid),
-        orderBy('createdAt', 'desc')
+        where('createdBy', '==', user.uid)
       );
     }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       console.log(`[INFO] Dashboard snapshot received: ${snapshot.size} proposals.`);
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Proposal));
+      // Sort on client side to avoid needing composite index setups in Firestore
+      data.sort((a, b) => {
+        const t1 = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+        const t2 = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+        return t2 - t1;
+      });
       setProposals(data);
       setLoading(false);
     }, (error) => {

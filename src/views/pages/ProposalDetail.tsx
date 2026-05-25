@@ -533,7 +533,7 @@ export default function ProposalDetail() {
   const handleDelete = async () => {
     if (!proposal || !id || !user) return;
     
-    const canDelete = isAdmin || proposal.createdBy === user.uid;
+    const canDelete = isAdmin || (isStaff && proposal.createdBy === user.uid && proposal.status === 'Draft');
     if (!canDelete) return;
 
     setActionLoading(true);
@@ -683,8 +683,8 @@ export default function ProposalDetail() {
               </div>
             )}
 
-            {/* Admin Delete Action (Trash) */}
-            {isAdmin && (
+            {/* Admin/Staff Delete Action (Trash) */}
+            {(isAdmin || (isStaff && proposal.createdBy === user?.uid && proposal.status === 'Draft')) && (
                <button
                  onClick={() => setShowDeleteModal(true)}
                  disabled={actionLoading}
