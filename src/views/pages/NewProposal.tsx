@@ -335,11 +335,6 @@ export default function NewProposal() {
           // Don't save transient/doc fields in template
           googleDocId: '',
           googleDocUrl: '',
-          companyName: '',
-          address: '',
-          email: '',
-          contactPerson: '',
-          position: '',
           status: 'Draft'
         },
         createdBy: user?.uid,
@@ -361,13 +356,13 @@ export default function NewProposal() {
     setFormData(prev => ({
       ...prev,
       ...data,
-      // Keep current client info
-      companyName: prev.companyName,
-      address: prev.address,
-      email: prev.email,
-      contactPerson: prev.contactPerson,
-      position: prev.position,
-      title: prev.title,
+      // Load template client info if present, otherwise keep what's already typed
+      companyName: data.companyName || prev.companyName,
+      address: data.address || prev.address,
+      email: data.email || prev.email,
+      contactPerson: data.contactPerson || prev.contactPerson,
+      position: data.position || prev.position,
+      title: data.title || prev.title,
     }));
     
     // Re-initialize currency inputs cleanly
