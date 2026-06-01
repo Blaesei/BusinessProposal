@@ -19,7 +19,8 @@ import {
   UserCircle,
   RefreshCw,
   Shield,
-  Users
+  Users,
+  Key,
 } from 'lucide-react';
 import { 
   collection, 
@@ -44,7 +45,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { CheckCircle2, Clock, XCircle, AlertCircle, Link as LinkIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-type SettingsTab = 'profile' | 'message-templates' | 'proposal-templates' | 'notifications' | 'user-management';
+type SettingsTab = 'profile' | 'message-templates' | 'proposal-templates' | 'notifications' | 'user-management' | 'google-integration';
 
 export default function Settings() {
   const { user, profile, isAdmin } = useAuth();
@@ -70,6 +71,20 @@ export default function Settings() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [updatingUserUid, setUpdatingUserUid] = useState<string | null>(null);
+  
+  // Google Integration State
+  const [googleStatus, setGoogleStatus] = useState<{
+    googleClientId: string;
+    googleClientSecretSet: boolean;
+    hasToken: boolean;
+    refreshToken: string;
+  } | null>(null);
+  const [loadingGoogleStatus, setLoadingGoogleStatus] = useState(false);
+  const [savingGoogleToken, setSavingGoogleToken] = useState(false);
+  const [manualToken, setManualToken] = useState('');
+  const [showManualToken, setShowManualToken] = useState(false);
+  const [scopesStatus, setScopesStatus] = useState<any>(null);
+  const [checkingScopes, setCheckingScopes] = useState(false);
   
   // Non-blocking Toast state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -108,6 +123,81 @@ export default function Settings() {
       setLoadingUsers(false);
     });
     return unsubscribe;
+  }, [activeTab, isAdmin]);
+
+  const fetchGoogleStatus = async () => {
+    if (!user || !isAdmin) return;
+    setLoadingGoogleStatus(true);
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch('/api/admin/google-status', {
+        headers: {
+          'Authorization': `Bearer ${idToken}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGoogleStatus(data);
+        setManualToken(data.refreshToken || '');
+      } else {
+        const errorData = await res.json();
+        showToast(errorData.error || 'Failed to load Google credentials status.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Error loading Google credentials:', err);
+      showToast('Error loading Google credentials status: ' + err.message, 'error');
+    } finally {
+      setLoadingGoogleStatus(false);
+    }
+  };
+
+  const handleSaveGoogleToken = async () => {
+    if (!user || !isAdmin) return;
+    setSavingGoogleToken(true);
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch('/api/admin/set-google-token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({ token: manualToken })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGoogleStatus(prev => prev ? { ...prev, hasToken: true, refreshToken: data.refreshToken } : null);
+        showToast('Google Refresh Token updated successfully and active!');
+      } else {
+        const errorData = await res.json();
+        showToast(errorData.error || 'Failed to update Google Refresh Token.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Error saving Google Refresh Token:', err);
+      showToast('Error saving Google Refresh Token: ' + err.message, 'error');
+    } finally {
+      setSavingGoogleToken(false);
+    }
+  };
+
+  const handleCheckScopes = async () => {
+    setCheckingScopes(true);
+    try {
+      const res = await fetch('/api/debug/scopes');
+      const data = await res.json();
+      setScopesStatus(data);
+    } catch (err: any) {
+      console.error('Error checking scopes:', err);
+      setScopesStatus({ status: '❌ Failed to connect to server scope check API.' });
+    } finally {
+      setCheckingScopes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'google-integration' && isAdmin) {
+      fetchGoogleStatus();
+    }
   }, [activeTab, isAdmin]);
 
   const handleUpdateRole = async (targetUserId: string, targetEmail: string, newRole: UserRole) => {
@@ -345,6 +435,14 @@ export default function Settings() {
                       label="User Management" 
                       active={activeTab === 'user-management'} 
                       onClick={() => setActiveTab('user-management')} 
+                    />
+                  )}
+                  {isAdmin && (
+                    <SidebarItem 
+                      icon={Key} 
+                      label="Google Integration" 
+                      active={activeTab === 'google-integration'} 
+                      onClick={() => setActiveTab('google-integration')} 
                     />
                   )}
                   <SidebarItem 
@@ -745,6 +843,145 @@ export default function Settings() {
                       <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">No users found</h3>
                     </div>
                   )}
+                </div>
+              )}
+
+              {activeTab === 'google-integration' && isAdmin && (
+                <div className="space-y-8 animate-in fade-in duration-300">
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900 font-sans tracking-tight">Google Workspace Integration</h2>
+                    <p className="text-sm text-slate-500 mt-1">Configure and manage Google API authentication and Refresh Token access.</p>
+                  </div>
+
+                  {/* Status Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="p-5 rounded-2xl bg-slate-55 border border-slate-200 relative overflow-hidden">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Client ID</div>
+                      {loadingGoogleStatus ? (
+                        <div className="h-6 w-24 bg-slate-200 animate-pulse rounded" />
+                      ) : (
+                        <div className="text-sm font-bold text-slate-800 truncate" title={googleStatus?.googleClientId}>
+                          {googleStatus?.googleClientId ? 'Configured ✅' : 'Missing ❌'}
+                        </div>
+                      )}
+                      <p className="text-xs text-slate-400 mt-2">Required from Google Cloud Console.</p>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-slate-55 border border-slate-200 relative overflow-hidden">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Client Secret</div>
+                      {loadingGoogleStatus ? (
+                        <div className="h-6 w-24 bg-slate-200 animate-pulse rounded" />
+                      ) : (
+                        <div className="text-sm font-bold text-slate-800">
+                          {googleStatus?.googleClientSecretSet ? 'Configured ✅' : 'Missing ❌'}
+                        </div>
+                      )}
+                      <p className="text-xs text-slate-400 mt-2">Required from Google Cloud Console.</p>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-slate-55 border border-slate-200 relative overflow-hidden">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Refresh Token</div>
+                      {loadingGoogleStatus ? (
+                        <div className="h-6 w-24 bg-slate-200 animate-pulse rounded" />
+                      ) : (
+                        <div className="text-sm font-bold text-slate-800">
+                          {googleStatus?.hasToken ? 'Active ✅' : 'Missing ❌'}
+                        </div>
+                      )}
+                      <p className="text-xs text-slate-400 mt-2">Required to generate doc templates.</p>
+                    </div>
+                  </div>
+
+                  {/* Manual Copy/Update Section */}
+                  <div className="p-6 rounded-2xl border border-slate-250 bg-white shadow-sm space-y-6">
+                    <div>
+                      <h3 className="text-md font-bold text-slate-900 font-sans">Manage Refresh Token</h3>
+                      <p className="text-sm text-slate-500 mt-0.5">Directly view, modify, or manually store your Google Refresh Token.</p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Google Refresh Token</label>
+                      <div className="relative">
+                        <input
+                          type={showManualToken ? "text" : "password"}
+                          value={manualToken}
+                          onChange={(e) => setManualToken(e.target.value)}
+                          placeholder="PASTE_YOUR_GOOGLE_REFRESH_TOKEN_HERE"
+                          className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:outline-none focus:border-[#1E2D5A] font-mono text-sm tracking-wide"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowManualToken(!showManualToken)}
+                          className="absolute right-3 top-3 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+                        >
+                          {showManualToken ? 'Hide' : 'Reveal'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <button
+                        onClick={handleSaveGoogleToken}
+                        disabled={savingGoogleToken || !manualToken}
+                        className="flex-grow sm:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-[#1E2D5A] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-[#1E2D5A]/10 hover:bg-[#2A3C74] transition-all active:scale-95 disabled:opacity-50"
+                      >
+                        {savingGoogleToken ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        Save Refresh Token
+                      </button>
+                      <button
+                        onClick={fetchGoogleStatus}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-6 py-3 text-sm font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        Reload Status
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Automatic Link Flow */}
+                  <div className="p-6 rounded-2xl border border-slate-200 bg-teal-50/20 shadow-sm space-y-6">
+                    <div>
+                      <h3 className="text-md font-bold text-teal-900 font-sans">Automatic Authentication Flow</h3>
+                      <p className="text-sm text-teal-700/80 mt-0.5">The easiest way to get or renew credentials. The obtained token will be automatically saved.</p>
+                    </div>
+
+                    <div className="p-4 bg-teal-50 border border-teal-100 rounded-xl text-xs text-teal-800 space-y-2">
+                      <p className="font-bold uppercase tracking-wider">💡 Troubleshooting Redirect Mismatch:</p>
+                      <p className="leading-relaxed">
+                        If you see a <b>redirect_uri_mismatch (Error 400)</b>, copy the callback URL below and add it to your <b>Authorized redirect URIs</b> in the Google Cloud Console credential settings:
+                      </p>
+                      <div className="bg-white p-2 rounded border border-teal-200 font-mono select-all text-[11px] truncate">
+                        {window.location.origin}/api/debug/auth-callback
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-4">
+                      <a
+                        href="/api/debug/auth-url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 px-6 py-3 text-sm font-bold text-white hover:bg-teal-700 shadow-md shadow-teal-600/15 transition-all active:scale-95 animate-pulse"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Authorize & Link Google Account
+                      </a>
+                      
+                      <button
+                        onClick={handleCheckScopes}
+                        disabled={checkingScopes}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-teal-200 bg-white px-6 py-3 text-sm font-bold text-teal-700 hover:bg-teal-50 transition-colors"
+                      >
+                        {checkingScopes ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
+                        Check Current Access & Permissions
+                      </button>
+                    </div>
+
+                    {scopesStatus && (
+                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 font-mono text-xs text-slate-700 whitespace-pre shadow-inner">
+                        <div className="font-sans font-bold text-slate-900 mb-2 border-b pb-1">System Scope Status:</div>
+                        {JSON.stringify(scopesStatus, null, 2)}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

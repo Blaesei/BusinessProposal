@@ -10,6 +10,7 @@ import path from 'path';
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -119,7 +120,32 @@ export async function startServer() {
   // ─── OAuth2 Setup ─────────────────────────────────────────────────────────
   const clientId     = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  let refreshToken   = process.env.GOOGLE_REFRESH_TOKEN || '';
+
+  // Load from temp file cache if exists
+  try {
+    const cachedPath = '/tmp/google_refresh_token_db.json';
+    if (fs.existsSync(cachedPath)) {
+      const parsed = JSON.parse(fs.readFileSync(cachedPath, 'utf8'));
+      if (parsed.refresh_token) {
+        refreshToken = parsed.refresh_token;
+        console.log('[Google Auth] Initialized with cached refresh token from /tmp');
+      }
+    }
+  } catch (error) {
+    console.warn('[Google Auth] Failed to read dynamic refresh token cache:', error);
+  }
+
+  // Load firebase config safely for Admin validation
+  let firebaseConfig: any = {};
+  try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (fs.existsSync(configPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch (e) {
+    console.error('[Firebase] Failed to load firebase-applet-config.json:', e);
+  }
 
   if (!clientId || !clientSecret || !refreshToken) {
     console.warn('[Google Auth] Missing one or more OAuth2 credentials:');
@@ -131,7 +157,9 @@ export async function startServer() {
   }
 
   const auth = new google.auth.OAuth2(clientId, clientSecret);
-  auth.setCredentials({ refresh_token: refreshToken });
+  if (refreshToken) {
+    auth.setCredentials({ refresh_token: refreshToken });
+  }
 
   const docs  = google.docs({ version: 'v1', auth });
   const drive = google.drive({ version: 'v3', auth });
@@ -333,10 +361,17 @@ export async function startServer() {
 
   // Helper to resolve the correct base URL dynamically based on the current request, or fall back to APP_URL
   const getDynamicBaseUrl = (req: express.Request): string => {
-    const forwardedHost = req.headers['x-forwarded-host'] || req.headers['host'] || req.get('host');
-    const forwardedProto = req.headers['x-forwarded-proto'] || 'https';
-    if (forwardedHost) {
-      return `${forwardedProto}://${forwardedHost}`;
+    const host = req.headers['x-forwarded-host'] || req.headers['host'] || req.get('host') || '';
+    const hostStr = Array.isArray(host) ? host[0] : host;
+    
+    // Default to 'https' for all Cloud Run deployments. Only use 'http' on localhost/local dev port
+    let proto = 'https';
+    if (hostStr.includes('localhost') || hostStr.includes('127.0.0.1') || hostStr.includes('3000')) {
+      proto = 'http';
+    }
+    
+    if (hostStr) {
+      return `${proto}://${hostStr}`;
     }
     return process.env.APP_URL || 'https://ais-dev-ogfhbqk46jsegpq76uchjf-149125843392.asia-northeast1.run.app';
   };
@@ -426,7 +461,7 @@ export async function startServer() {
   });
 
   // ─── Debug Route: Auth Callback ───────────────────────────────────────────
-  // Handles the response from Google and displays the refresh token.
+  // Handles the response from Google and displays/stores the refresh token.
   app.get('/api/debug/auth-callback', async (req, res) => {
     const code = req.query.code as string;
     if (!code) return res.status(400).send('No code provided');
@@ -438,19 +473,148 @@ export async function startServer() {
       const authCallbackClient = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       const { tokens } = await authCallbackClient.getToken(code);
       
+      let tokenAutoSaved = false;
+      if (tokens.refresh_token) {
+        // Cache the token dynamically
+        refreshToken = tokens.refresh_token;
+        auth.setCredentials({ refresh_token: tokens.refresh_token });
+        try {
+          fs.writeFileSync('/tmp/google_refresh_token_db.json', JSON.stringify({ refresh_token: tokens.refresh_token }), 'utf8');
+          tokenAutoSaved = true;
+          console.log('[Google Auth] Automatically cached new refresh token from auth flow.');
+        } catch (e: any) {
+          console.error('[Google Auth] Failed to save callback refresh token to /tmp:', e.message);
+        }
+      }
+
       res.send(`
-        <div style="font-family: sans-serif; padding: 40px; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; margin-top: 50px;">
-          <h2 style="color: #0d9488; margin-top: 0;">✅ Authorization Successful!</h2>
-          <p style="color: #475569; font-size: 15px;">Copy the following token and update your <b>GOOGLE_REFRESH_TOKEN</b> environment variable:</p>
-          <div style="background: #f1f5f9; padding: 20px; border-radius: 8px; font-family: monospace; word-break: break-all; border: 1px solid #e2e8f0; margin: 20px 0; color: #0f172a; font-size: 14px;">
-            ${tokens.refresh_token}
+        <div style="font-family: sans-serif; padding: 40px; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; margin-top: 50px; text-align: center; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
+          <h2 style="color: #0d9488; margin-top: 0; font-size: 24px;">✅ Authorization Successful!</h2>
+          
+          ${tokenAutoSaved ? `
+            <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 20px 0; text-align: left;">
+              <p style="color: #047857; font-weight: bold; margin-top: 0; font-size: 15px;">💾 AUTOMATICALLY SAVED & ACTIVATED!</p>
+              <p style="color: #065f46; font-size: 14px; margin: 0; line-height: 1.5;">
+                We have successfully saved this Refresh Token directly into the active system context! The Google Doc generation and Gmail features are now fully functional. You do <b>NOT</b> need to copy-paste anything.
+              </p>
+            </div>
+          ` : `
+            <div style="background: #fff7ed; border: 1px solid #ffedd5; padding: 16px; border-radius: 8px; margin: 20px 0; text-align: left;">
+              <p style="color: #c2410c; font-weight: bold; margin-top: 0; font-size: 15px;">⚠️ RE-AUTHENTICATION NOTE</p>
+              <p style="color: #9a3412; font-size: 14px; margin: 0; line-height: 1.5;">
+                Google did not return a new refresh token because this app was already approved. To receive a new one, please ensure you use the "Authorize App" button which prompts consent, or copy your existing token.
+              </p>
+            </div>
+          `}
+
+          <p style="color: #475569; font-size: 15px; margin-bottom: 5px;">Your Google Refresh Token:</p>
+          <div style="background: #f1f5f9; padding: 16px; border-radius: 8px; font-family: monospace; word-break: break-all; border: 1px solid #e2e8f0; margin: 10px 0; color: #0f172a; font-size: 13px; text-align: left;">
+            ${tokens.refresh_token || '<i>[Hidden or already authorized]</i>'}
           </div>
-          <p style="color: #64748b; font-size: 14px;">After updating the variable in your AI Studio Environment Settings, click <b>Restart Dev Server</b> to apply changes.</p>
+
+          <p style="color: #64748b; font-size: 14px; line-height: 1.5; margin-top: 25px;">
+            You can now close this tab. You can also view or update this token anytime via your <b>Settings &rarr; Google Integration</b> dashboard.
+          </p>
+          
+          <div style="margin-top: 30px;">
+            <button onclick="window.close()" style="padding: 10px 24px; background: #e2e8f0; color: #334155; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px;">
+              Close Window
+            </button>
+          </div>
         </div>
       `);
     } catch (error: any) {
       console.error('[Debug] Callback error:', error.message);
       res.status(500).send(`Error getting token: ${error.message}`);
+    }
+  });
+
+  // Verify Firebase user ID token as Administrator
+  async function verifyFirebaseAdmin(authorizationHeader?: string): Promise<{ uid: string; email: string } | null> {
+    if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
+      return null;
+    }
+    const idToken = authorizationHeader.split('Bearer ')[1];
+    try {
+      if (!firebaseConfig.apiKey) {
+        console.warn('[Google Auth] No Firebase API key configured to verify admin token.');
+        return null;
+      }
+      const response = await globalThis.fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseConfig.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken })
+      });
+      const data = await response.json();
+      if (!data.users || data.users.length === 0) return null;
+      const user = data.users[0];
+      
+      const adminEmails = ['damoncrz2872@gmail.com', 'stlaf.acc08@gmail.com'];
+      const adminUids = ['wY4rgbtqAWgzXz0hlrLLVvRrGWM2'];
+      const isUserAdmin = adminEmails.includes(user.email) || adminUids.includes(user.localId);
+      
+      if (isUserAdmin) {
+        return { uid: user.localId, email: user.email };
+      }
+      return null;
+    } catch (error) {
+      console.error('[Google Auth] Error verifying Firebase token:', error);
+      return null;
+    }
+  }
+
+  // Admin endpoint: Retrieve current Google Credentials Status
+  app.get('/api/admin/google-status', async (req, res) => {
+    try {
+      const adminUser = await verifyFirebaseAdmin(req.headers.authorization);
+      if (!adminUser) {
+        return res.status(401).json({ error: 'Unauthorized: Admin privileges required.' });
+      }
+
+      res.json({
+        googleClientId: clientId || '',
+        googleClientSecretSet: !!clientSecret,
+        hasToken: !!refreshToken,
+        refreshToken: refreshToken,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin endpoint: Save Google Refresh Token manually
+  app.post('/api/admin/set-google-token', async (req, res) => {
+    try {
+      const adminUser = await verifyFirebaseAdmin(req.headers.authorization);
+      if (!adminUser) {
+        return res.status(401).json({ error: 'Unauthorized: Admin privileges required.' });
+      }
+
+      const { token } = req.body;
+      if (!token) {
+        return res.status(400).json({ error: 'Refresh token cannot be empty.' });
+      }
+
+      // Update in memory and shared client
+      refreshToken = token;
+      auth.setCredentials({ refresh_token: token });
+
+      // Persist to cache file
+      try {
+        fs.writeFileSync('/tmp/google_refresh_token_db.json', JSON.stringify({ refresh_token: token }), 'utf8');
+      } catch (fsErr: any) {
+        console.error('[Google Auth] Failed to write token cache file:', fsErr.message);
+      }
+      
+      res.json({
+        success: true,
+        message: 'Google Refresh Token successfully updated and activated.',
+        hasToken: true,
+        refreshToken: token,
+      });
+    } catch (err: any) {
+      console.error('[Google Auth] Failed to save/update refresh token:', err.message);
+      res.status(500).json({ error: 'Failed to update refresh token: ' + err.message });
     }
   });
 
